@@ -4,12 +4,19 @@ build-backend = "maturin"
 
 [project]
 name = "fast-walk"
+description = "A fast reimplementation of ast.walk()"
 requires-python = ">=3.13"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
 ]
+license = { text = "MIT" }
+readme = "README.md"
 dynamic = ["version"]
 
 [tool.maturin]
@@ -23,3 +30,6 @@ cache-keys = [
     { file = "fast_walk.pyi" },
     { file = "src/**/*.rs" },
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.4.2", "pytest-codspeed>=4.2.0"]

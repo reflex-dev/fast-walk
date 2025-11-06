@@ -1,6 +1,24 @@
 use pyo3::types::{PyList, PyModule, PyTuple};
 use pyo3::{intern, prelude::*};
 
+fn getattr<'py>(
+    obj: &Bound<'py, PyAny>,
+    attr_name: &Bound<'py, PyAny>,
+) -> Option<Bound<'py, PyAny>> {
+    let py = obj.py();
+
+    let mut resp_ptr: *mut pyo3::ffi::PyObject = std::ptr::null_mut();
+    let attr_ptr = unsafe {
+        pyo3::ffi::PyObject_GetOptionalAttr(obj.as_ptr(), attr_name.as_ptr(), &mut resp_ptr)
+    };
+
+    if attr_ptr == 1 {
+        Some(unsafe { Bound::from_owned_ptr(py, resp_ptr) })
+    } else {
+        None
+    }
+}
+
 fn walk_node<'py>(
     node: Bound<'py, PyAny>,
     field_names: Bound<'py, PyTuple>,
@@ -10,10 +28,10 @@ fn walk_node<'py>(
 
     // Recursively walk through child nodes
     for field in field_names {
-        if let Ok(Some(child)) = node.getattr_opt(unsafe { field.cast_unchecked() }) {
+        if let Some(child) = getattr(&node, &field) {
             if child.is_exact_instance_of::<PyList>() {
                 for item in unsafe { child.cast_unchecked::<PyList>() } {
-                    if let Ok(Some(subfields)) = item.getattr_opt(intern!(item.py(), "_fields")) {
+                    if let Some(subfields) = getattr(&item, intern!(item.py(), "_fields")) {
                         walk_node(
                             item,
                             unsafe { subfields.cast_into_unchecked::<PyTuple>() },
@@ -21,7 +39,7 @@ fn walk_node<'py>(
                         )?;
                     }
                 }
-            } else if let Ok(Some(subfields)) = child.getattr_opt(intern!(child.py(), "_fields")) {
+            } else if let Some(subfields) = getattr(&child, intern!(child.py(), "_fields")) {
                 walk_node(
                     child,
                     unsafe { subfields.cast_into_unchecked::<PyTuple>() },

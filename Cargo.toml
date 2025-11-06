@@ -1,6 +1,6 @@
 [package]
 name = "fast-walk"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -13,6 +13,8 @@ crate-type = ["cdylib"]
 
 [profile.release]
 debug = false
+lto = true        # Link-time optimization.
+codegen-units = 1 # Slower compilation but faster code. 
 
 [dependencies]
 pyo3 = "0.27.1"

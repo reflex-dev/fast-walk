@@ -12,7 +12,7 @@ pip install fast-walk
 
 ```python
 from fast_walk import walk
-import parse
+import ast
 
 code = """
 def hello(  x,y,   z  ):
