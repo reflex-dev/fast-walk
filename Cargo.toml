@@ -1,0 +1,18 @@
+[package]
+name = "fast-walk"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/reflex-dev/fast-walk"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "fast_walk"
+crate-type = ["cdylib"]
+
+[profile.release]
+debug = false
+
+[dependencies]
+pyo3 = { version = "0.27.1", features = ["abi3-py313"] }
