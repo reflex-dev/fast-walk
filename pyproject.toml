@@ -20,6 +20,6 @@ cache-keys = [
     { file = "Cargo.toml" },
     { file = "Cargo.lock" },
     { file = "pyproject.toml" },
-    { file = "walk.pyi" },
+    { file = "fast_walk.pyi" },
     { file = "src/**/*.rs" },
 ]
