@@ -32,4 +32,8 @@ cache-keys = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.4.2", "pytest-codspeed>=4.2.0"]
+dev = [
+    "py-spy>=0.4.1",
+    "pytest>=8.4.2",
+    "pytest-codspeed>=4.2.0",
+]

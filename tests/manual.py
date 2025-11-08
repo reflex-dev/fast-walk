@@ -7,5 +7,8 @@ if __name__ == "__main__":
     source_code = Path(difflib.__file__).read_text()
     node = parse(source_code)
 
-    for _ in range(10_000):
+    def walk_benchmark():
         walk(node)
+
+    for _ in range(100_000):
+        walk_benchmark()
