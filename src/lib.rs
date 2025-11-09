@@ -75,11 +75,6 @@ unsafe fn is_subtype(
     subtype: *mut pyo3::ffi::PyTypeObject,
     base: *mut pyo3::ffi::PyTypeObject,
 ) -> bool {
-    // If they're the same type, it's trivially a subtype
-    if subtype == base {
-        return true;
-    }
-
     // Walk up the inheritance chain via tp_base, max 3 jumps
     let mut current = subtype;
     for _ in 0..3 {
