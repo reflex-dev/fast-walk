@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 
 [profile.release]
 debug = false
+opt-level = 3
 lto = true        # Link-time optimization.
 codegen-units = 1 # Slower compilation but faster code. 
 
