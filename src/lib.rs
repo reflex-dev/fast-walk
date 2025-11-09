@@ -6,13 +6,12 @@ use pyo3::ffi::{self, Py_ssize_t, PyDictObject, PyObject, PyTypeObject};
 use pyo3::types::{PyList, PyModule, PyType};
 use pyo3::{PyTypeInfo, prelude::*};
 
-pub struct DictValuesIter {
+pub struct ReverseDictValuesIter {
     entries: *const pydict::PyDictUnicodeEntry,
     current: usize,
-    end: usize,
 }
 
-impl DictValuesIter {
+impl ReverseDictValuesIter {
     /// Creates a new iterator over dictionary values
     ///
     /// # Safety
@@ -30,21 +29,20 @@ impl DictValuesIter {
 
             Self {
                 entries,
-                current: 0,
-                end: n,
+                current: n,
             }
         }
     }
 }
 
-impl Iterator for DictValuesIter {
+impl Iterator for ReverseDictValuesIter {
     type Item = *mut PyObject;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Skip null entries until we find a valid one or reach the end
-        while self.current < self.end {
-            let entry = &unsafe { *self.entries.add(self.current) };
-            self.current += 1;
+        while self.current > 0 {
+            self.current -= 1;
+            let entry: &pydict::PyDictUnicodeEntry = &unsafe { *self.entries.add(self.current) };
 
             if !entry.me_value.is_null() {
                 return Some(entry.me_value);
@@ -71,27 +69,23 @@ fn get_instance_dict_fast(obj: *mut PyObject) -> Option<*mut PyObject> {
     }
 }
 
-unsafe fn is_subtype(
-    subtype: *mut pyo3::ffi::PyTypeObject,
-    base: *mut pyo3::ffi::PyTypeObject,
+fn isinstance_of_ast(
+    obj: *mut PyObject,
+    base_ast_and_expr_type: (*mut PyTypeObject, *mut PyTypeObject),
 ) -> bool {
-    // Walk up the inheritance chain via tp_base, max 3 jumps
-    let mut current = subtype;
-    for _ in 0..3 {
-        current = unsafe { (*current).tp_base };
-        if current.is_null() {
-            return false;
-        }
-        if current == base {
-            return true;
-        }
+    let subtype = unsafe { ffi::Py_TYPE(obj) };
+    let first_supertype = unsafe { (*subtype).tp_base };
+    if first_supertype.is_null() {
+        return false;
+    }
+    let (base_ast_type, base_expr_type) = base_ast_and_expr_type;
+    if first_supertype == base_ast_type {
+        return true;
     }
 
-    false
-}
-
-fn isinstance_of_ast(obj: *mut PyObject, base_ast_type: &*mut PyTypeObject) -> bool {
-    unsafe { is_subtype(ffi::Py_TYPE(obj), *base_ast_type) }
+    let second_supertype = unsafe { (*first_supertype).tp_base };
+    
+    second_supertype == base_ast_type || second_supertype == base_expr_type
 }
 
 fn is_list(obj: *mut PyObject, py_list_type: *mut PyTypeObject) -> bool {
@@ -106,27 +100,32 @@ fn get_item_of_list(obj: *mut PyObject, index: Py_ssize_t) -> *mut PyObject {
     unsafe { ffi::PyList_GET_ITEM(obj, index) }
 }
 
-fn walk_node(
+fn walk_node_iterative(
     node: *mut PyObject,
-    base_ast_type: &*mut PyTypeObject,
+    base_ast_and_expr_type: (*mut PyTypeObject, *mut PyTypeObject),
     py_list_type: *mut PyTypeObject,
     result_list: &mut Vec<*mut PyObject>,
 ) -> PyResult<()> {
-    result_list.push(node);
+    let mut stack = vec![node];
 
-    // Recursively walk through child nodes
-    let Some(dict) = get_instance_dict_fast(node) else {
-        return Ok(());
-    };
-    for item_ptr in unsafe { DictValuesIter::new(dict.cast::<PyDictObject>()) } {
-        if isinstance_of_ast(item_ptr, base_ast_type) {
-            walk_node(item_ptr, base_ast_type, py_list_type, result_list)?;
-        } else if is_list(item_ptr, py_list_type) {
-            let length = get_length_of_list(item_ptr);
-            for i in 0..length {
-                let item_ptr = get_item_of_list(item_ptr, i);
-                if isinstance_of_ast(item_ptr, base_ast_type) {
-                    walk_node(item_ptr, base_ast_type, py_list_type, result_list)?;
+    while let Some(current_node) = stack.pop() {
+        result_list.push(current_node);
+
+        // Walk through child nodes
+        let Some(dict) = get_instance_dict_fast(current_node) else {
+            continue;
+        };
+
+        for item_ptr in unsafe { ReverseDictValuesIter::new(dict.cast::<PyDictObject>()) } {
+            if isinstance_of_ast(item_ptr, base_ast_and_expr_type) {
+                stack.push(item_ptr);
+            } else if is_list(item_ptr, py_list_type) {
+                let length = get_length_of_list(item_ptr);
+                for i in (0..length).rev() {
+                    let item_ptr = get_item_of_list(item_ptr, i);
+                    if isinstance_of_ast(item_ptr, base_ast_and_expr_type) {
+                        stack.push(item_ptr);
+                    }
                 }
             }
         }
@@ -136,15 +135,16 @@ fn walk_node(
 }
 
 thread_local! {
-    static BASE_AST_TYPE: RefCell<Option<*mut PyTypeObject>> = const { RefCell::new(None) };
+    static BASE_AST_TYPE_AND_EXPR: RefCell<Option<(*mut PyTypeObject, *mut PyTypeObject)>> = const { RefCell::new(None) };
 }
 
 #[inline(never)]
-fn get_base_ast_type<'py>(py: Python<'py>) -> PyResult<*mut PyTypeObject> {
+fn get_base_ast_type<'py>(py: Python<'py>) -> PyResult<(*mut PyTypeObject, *mut PyTypeObject)> {
     let ast_module = py.import("ast")?;
     let ast_class = ast_module.getattr("AST")?.cast_into::<PyType>()?;
+    let expr_class = ast_module.getattr("expr")?.cast_into::<PyType>()?;
 
-    Ok(ast_class.as_type_ptr())
+    Ok((ast_class.as_type_ptr(), expr_class.as_type_ptr()))
 }
 
 #[pyfunction]
@@ -152,7 +152,7 @@ fn walk<'py>(py: Python, node: Bound<'py, PyAny>) -> PyResult<Py<PyList>> {
     let mut result_list = Vec::new();
 
     // Initialize if needed (separate step with mutable borrow)
-    BASE_AST_TYPE.with(|cache| {
+    BASE_AST_TYPE_AND_EXPR.with(|cache| {
         if cache.borrow().is_none() {
             *cache.borrow_mut() = Some(get_base_ast_type(py)?);
         }
@@ -160,12 +160,13 @@ fn walk<'py>(py: Python, node: Bound<'py, PyAny>) -> PyResult<Py<PyList>> {
     })?;
 
     // Now use immutable borrow for the actual work
-    BASE_AST_TYPE.with(|cache| {
+    BASE_AST_TYPE_AND_EXPR.with(|cache| {
         let cache_ref = cache.borrow();
-        let base_ast_type = cache_ref.as_ref().unwrap();
-        walk_node(
+        let base_ast_and_expr_type = cache_ref.as_ref().unwrap();
+
+        walk_node_iterative(
             node.as_ptr(),
-            base_ast_type,
+            *base_ast_and_expr_type,
             PyList::type_object_raw(py),
             &mut result_list,
         )?;
@@ -200,7 +201,7 @@ mod tests {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             let dict_ptr = dict.as_ptr() as *mut pyo3::ffi::PyDictObject;
-            let values = unsafe { DictValuesIter::new(dict_ptr) }.collect::<Vec<_>>();
+            let values = unsafe { ReverseDictValuesIter::new(dict_ptr) }.collect::<Vec<_>>();
             assert_eq!(values.len(), 0);
         });
     }
@@ -216,7 +217,7 @@ mod tests {
             dict.set_item("c", 3).unwrap();
 
             let dict_ptr = dict.as_ptr() as *mut pyo3::ffi::PyDictObject;
-            let values = unsafe { DictValuesIter::new(dict_ptr) }.collect::<Vec<_>>();
+            let values = unsafe { ReverseDictValuesIter::new(dict_ptr) }.collect::<Vec<_>>();
             assert_eq!(values.len(), 3);
         });
     }
