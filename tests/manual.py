@@ -10,5 +10,5 @@ if __name__ == "__main__":
     def walk_benchmark():
         walk(node)
 
-    for _ in range(100_000):
+    for _ in range(1_000):
         walk_benchmark()
