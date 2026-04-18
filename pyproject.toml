@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.9,<2.0"]
+requires = ["maturin>=1.13,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -34,6 +34,6 @@ cache-keys = [
 [dependency-groups]
 dev = [
     "py-spy>=0.4.1",
-    "pytest>=8.4.2",
-    "pytest-codspeed>=4.2.0",
+    "pytest>=9.0.3",
+    "pytest-codspeed>=4.4.0",
 ]

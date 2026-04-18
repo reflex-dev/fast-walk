@@ -1,6 +1,6 @@
 [package]
 name = "fast-walk"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -12,11 +12,10 @@ name = "fast_walk"
 crate-type = ["cdylib"]
 
 [profile.release]
-debug = false
+debug = "line-tables-only" # symbols for perf profiling; near-zero perf cost
 opt-level = 3
 lto = true        # Link-time optimization.
-codegen-units = 1 # Slower compilation but faster code. 
+codegen-units = 1 # Slower compilation but faster code.
 
 [dependencies]
-fastset = "0.5.2"
-pyo3 = "0.27.1"
+pyo3 = "0.28.3"
