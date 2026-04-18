@@ -1,12 +1,16 @@
 from ast import AST, NodeVisitor as ASTNodeVisitor, parse
 from ast import walk as ast_walk
 import ast
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 
 from pytest_codspeed import BenchmarkFixture
-from fast_walk import walk as fast_walk
+from fast_walk import walk_dfs, walk_unordered, _walk_count
 import pytest
+
+
+def ast_walk_list(node: AST) -> list[AST]:
+    return list(ast_walk(node))
 
 
 def python_walk_helper(node: AST, fields: tuple[str, ...], nodes: list[AST]):
@@ -30,20 +34,37 @@ def python_walk(node: AST) -> list[AST]:
 @pytest.mark.parametrize(
     "algorithm",
     [
-        ast_walk,
-        fast_walk,
+        ast_walk_list,
+        walk_dfs,
+        walk_unordered,
         python_walk,
     ],
 )
-def test_walk(benchmark: BenchmarkFixture, algorithm: Callable[[AST], Iterable[AST]]):
+def test_walk(benchmark: BenchmarkFixture, algorithm: Callable[[AST], list[AST]]):
     import difflib
 
     source_code = Path(difflib.__file__).read_text()
     node = parse(source_code)
 
     def run():
-        for _ in algorithm(node):
-            pass
+        algorithm(node)
+
+    benchmark(run)
+
+
+def test_walk_count(benchmark: BenchmarkFixture):
+    """Traversal cost only — no PyList build, no per-item bound wrapping.
+
+    Delta vs `test_walk[fast_walk]` is the ceiling for a PyList-build
+    optimization. If the delta is small, it isn't worth chasing.
+    """
+    import difflib
+
+    source_code = Path(difflib.__file__).read_text()
+    node = parse(source_code)
+
+    def run():
+        _walk_count(node)
 
     benchmark(run)
 
