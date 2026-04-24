@@ -40,6 +40,10 @@ def test_refcount_neutral_after_walks():
     tree = ast.parse(SOURCE)
     sample = list(ast.walk(tree))
 
+    # Drain any prior-test garbage (shared AST singletons like ast.Load()
+    # have refcounts that reflect every live AST tree in the process,
+    # so leftover trees from earlier tests would inflate `before`).
+    gc.collect()
     before = [sys.getrefcount(n) for n in sample]
     for _ in range(1000):
         fast_walk(tree)  # result is dropped immediately as an expr statement

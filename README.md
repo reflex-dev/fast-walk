@@ -45,14 +45,16 @@ Benchmark on CPython 3.13, walking the AST of `difflib.py` (~2000 lines,
 
 | implementation             | min time | relative |
 | -------------------------- | -------- | -------- |
-| `ast.walk` (stdlib)        | ~2.3 ms  | 1×       |
-| pure-Python equivalent     | ~1.0 ms  | ~2×      |
-| `fast_walk.walk_dfs`       | ~18 µs   | ~130×    |
-| `fast_walk.walk_unordered` | ~13 µs   | ~180×    |
+| `ast.walk` (stdlib)        | ~1.9 ms  | 1×       |
+| pure-Python equivalent     | ~400 µs  | ~5×      |
+| `fast_walk.walk_dfs`       | ~5.6 µs  | ~340×    |
+| `fast_walk.walk_unordered` | ~4.3 µs  | ~440×    |
 
 Both `fast_walk` entry points are semantically equivalent to
 `list(ast.walk(node))` — they return the same set of AST nodes. They
-differ only in visit order.
+differ only in visit order. User-attached attributes outside `_fields`
+(e.g. a `.parent` back-reference set by an AST transformer) are
+ignored, matching `ast.walk`'s behaviour.
 
 ## Development
 

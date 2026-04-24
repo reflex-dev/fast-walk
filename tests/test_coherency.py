@@ -113,6 +113,18 @@ SOURCES: dict[str, str] = {
 
         type Alias[T] = list[T]
     """),
+    # Wider / deeper sources to exercise traversal on bigger trees. The
+    # smaller sources above catch most syntactic edge cases; these ones
+    # are here to surface scale-sensitive bugs — unbounded stack growth,
+    # quadratic behaviour, cycle-like regressions — that only appear once
+    # the node count is large enough.
+    "many_small_statements": "\n".join(f"x{i} = {i}" for i in range(500)),
+    "wide_function_body": textwrap.dedent("""
+        def big():
+    """) + "\n".join(f"    y{i} = f({i}) + g({i})" for i in range(300)),
+    "deeply_nested_calls": "f(" * 100 + "x" + ")" * 100,
+    "deeply_nested_attributes": "a" + ".b" * 200,
+    "deeply_nested_binops": " + ".join(f"x{i}" for i in range(300)),
 }
 
 
@@ -249,3 +261,61 @@ def test_matches_stdlib_for_sizable_real_file():
     expected = _multiset(ast.walk(tree))
     assert _multiset(walk_dfs(tree)) == expected
     assert _multiset(walk_unordered(tree)) == expected
+
+
+@pytest.mark.parametrize("walk_fn", [walk_dfs, walk_unordered])
+def test_parent_back_references_do_not_inflate_walk(walk_fn, tree: ast.AST):
+    """Decorating nodes with `.parent` back-references is a common AST-
+    transformer pattern. `ast.walk` never follows non-`_fields` keys, so
+    the back-refs are invisible to it — fast_walk must match. Under the
+    old "scan every __dict__ value" implementation this would either
+    infinite-loop or silently multiply the result; today it's guarded by
+    the per-type `_fields`-length bound."""
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child.parent = node  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert _multiset(walk_fn(tree)) == _multiset(ast.walk(tree))
+
+
+@pytest.mark.parametrize("walk_fn", [walk_dfs, walk_unordered])
+def test_self_reference_does_not_inflate_walk(walk_fn):
+    """Minimal cycle: a node attaches a reference to itself via a non-
+    `_fields` attribute. Must terminate and not double-count."""
+    tree = ast.parse("x = 1")
+    tree.body[0].self_ref = tree.body[0]  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert _multiset(walk_fn(tree)) == _multiset(ast.walk(tree))
+
+
+@pytest.mark.parametrize("walk_fn", [walk_dfs, walk_unordered])
+def test_non_fields_ast_attribute_is_ignored(walk_fn):
+    """A user-attached AST reference outside `_fields` must not leak
+    into the walk result — not even when there's no cycle. Keeps us
+    strictly equivalent to `ast.walk`."""
+    tree = ast.parse("x = 1")
+    sibling = ast.parse("y = 2").body[0]
+    tree.body[0].extra = sibling  # pyright: ignore[reportAttributeAccessIssue]
+
+    result = walk_fn(tree)
+    assert _multiset(result) == _multiset(ast.walk(tree))
+    assert id(sibling) not in {id(n) for n in result}
+
+
+def test_parent_back_references_on_real_file():
+    """Scale check for the cycle fix: every node in a real module gets
+    a `.parent` back-reference, and both walks must still match
+    `ast.walk` exactly. Under a regression this would exhaust memory."""
+    import difflib
+    from pathlib import Path
+
+    tree = ast.parse(Path(difflib.__file__).read_text())
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            child.parent = node  # pyright: ignore[reportAttributeAccessIssue]
+
+    expected = _multiset(ast.walk(tree))
+    assert _multiset(walk_dfs(tree)) == expected
+    assert _multiset(walk_unordered(tree)) == expected
+
+
