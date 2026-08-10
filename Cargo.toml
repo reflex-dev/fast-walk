@@ -1,6 +1,6 @@
 [package]
 name = "fast-walk"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -18,4 +18,4 @@ lto = true        # Link-time optimization.
 codegen-units = 1 # Slower compilation but faster code.
 
 [dependencies]
-pyo3 = "0.28.3"
+pyo3 = "0.29.2"
