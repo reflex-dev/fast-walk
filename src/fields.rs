@@ -97,8 +97,10 @@ fn type_info(py: Python<'_>, kind: *mut PyTypeObject) -> *const TypeInfo {
     })
 }
 
-/// Call `visit(field_index, value)` for each field `node` has set, in
-/// `_fields` order. Values are borrowed from the node's dict.
+/// Call `visit(field_index, value)` for each field `node` has, in `_fields`
+/// order, as `ast.iter_fields` reads them: from the node's dict, else by
+/// attribute lookup, which finds the class default of an optional field a
+/// constructor left out (`ast.Constant(value=1)` has no `kind` entry).
 unsafe fn for_each_field(
     py: Python<'_>,
     node: *mut PyObject,
@@ -110,13 +112,24 @@ unsafe fn for_each_field(
     };
     for (index, name) in info.fields.iter().enumerate() {
         let value = unsafe { ffi::PyDict_GetItemWithError(dict, name.as_ptr()) };
-        if value.is_null() {
-            if unsafe { !ffi::PyErr_Occurred().is_null() } {
-                return Err(PyErr::fetch(py));
-            }
+        if !value.is_null() {
+            visit(index, value)?;
             continue;
         }
-        visit(index, value)?;
+        if unsafe { !ffi::PyErr_Occurred().is_null() } {
+            return Err(PyErr::fetch(py));
+        }
+        let inherited = unsafe { ffi::PyObject_GetAttr(node, name.as_ptr()) };
+        if inherited.is_null() {
+            let error = PyErr::fetch(py);
+            if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) {
+                continue;
+            }
+            return Err(error);
+        }
+        let visited = visit(index, inherited);
+        unsafe { ffi::Py_DECREF(inherited) };
+        visited?;
     }
     Ok(())
 }
@@ -178,33 +191,133 @@ impl<'py> Walk<'py> {
     }
 }
 
-fn type_pointers(kinds: &Bound<'_, PyTuple>) -> PyResult<Vec<*mut PyTypeObject>> {
-    kinds
-        .iter()
-        .map(|kind| Ok(kind.cast_into::<PyType>()?.as_type_ptr()))
-        .collect()
+/// A set of exact types, sorted for a binary search.
+pub(crate) struct TypeSet(Vec<usize>);
+
+impl TypeSet {
+    pub(crate) fn new(kinds: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let mut pointers = kinds
+            .iter()
+            .map(|kind| Ok(kind.cast_into::<PyType>()?.as_type_ptr() as usize))
+            .collect::<PyResult<Vec<_>>>()?;
+        pointers.sort_unstable();
+        pointers.dedup();
+        Ok(Self(pointers))
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, node: *mut PyObject) -> bool {
+        self.0
+            .binary_search(&(unsafe { ffi::Py_TYPE(node) } as usize))
+            .is_ok()
+    }
 }
 
 /// Return every node under `node` (`node` included) whose exact type is in
 /// `kinds`, in depth-first pre-order. Unlike `walk_frontier`, matches are
-/// descended into.
+/// descended into, except a node whose exact type is in `prune`: it is
+/// returned if it matches, and its children are skipped. `node` itself is
+/// always descended.
 #[pyfunction]
+#[pyo3(signature = (node, kinds, prune=None))]
 pub fn walk_of_types<'py>(
     py: Python<'py>,
     node: Bound<'py, PyAny>,
     kinds: Bound<'py, PyTuple>,
+    prune: Option<Bound<'py, PyTuple>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let kinds = type_pointers(&kinds)?;
+    let kinds = TypeSet::new(&kinds)?;
+    let prune = prune.map(|prune| TypeSet::new(&prune)).transpose()?;
     let walk = Walk::new(py)?;
+    let root = node.as_ptr();
     let mut result = Vec::new();
-    let mut stack = vec![node.as_ptr()];
+    let mut stack = vec![root];
     while let Some(current) = stack.pop() {
-        if kinds.contains(&unsafe { ffi::Py_TYPE(current) }) {
+        if kinds.contains(current) {
             result.push(current);
+        }
+        if current != root && prune.as_ref().is_some_and(|prune| prune.contains(current)) {
+            continue;
         }
         walk.push_children(current, &mut stack)?;
     }
     vec_into_pylist(py, &result)
+}
+
+/// Set `child.parent = parent` for every node under `node`, visiting parents
+/// in depth-first pre-order and each parent's children in
+/// `ast.iter_child_nodes` order. `node` itself is left alone.
+#[pyfunction]
+pub fn set_parents(py: Python<'_>, node: Bound<'_, PyAny>) -> PyResult<()> {
+    let walk = Walk::new(py)?;
+    let name = intern!(py, "parent");
+    let mut children = Vec::new();
+    for parent in walk.pre_order(node.as_ptr())? {
+        children.clear();
+        walk.push_children(parent, &mut children)?;
+        for &child in children.iter().rev() {
+            if unsafe { ffi::PyObject_SetAttr(child, name.as_ptr(), parent) } == -1 {
+                return Err(PyErr::fetch(py));
+            }
+        }
+    }
+    Ok(())
+}
+
+const VISIT: i64 = 0;
+const ENTER: i64 = 1;
+const LEAVE: i64 = 2;
+
+enum Step {
+    Child(*mut PyObject),
+    Leave(*mut PyObject),
+}
+
+/// The calls a `NodeVisitor` makes descending from `node`, as a list of
+/// `(event, node)` pairs: `(0, n)` for a descendant whose exact type is in
+/// `kinds` (dispatched, not descended), and `(1, n)` / `(2, n)` around the
+/// descent of a node whose exact type is in `bracket`. `node` itself is
+/// always descended, and bracketed if its type is in `bracket`.
+#[pyfunction]
+pub fn walk_frontier_events<'py>(
+    py: Python<'py>,
+    node: Bound<'py, PyAny>,
+    kinds: Bound<'py, PyTuple>,
+    bracket: Bound<'py, PyTuple>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let kinds = TypeSet::new(&kinds)?;
+    let bracket = TypeSet::new(&bracket)?;
+    let walk = Walk::new(py)?;
+    let mut events: Vec<(i64, *mut PyObject)> = Vec::new();
+    let mut stack: Vec<Step> = Vec::new();
+    let mut children = Vec::new();
+    let mut open = |current: *mut PyObject,
+                    stack: &mut Vec<Step>,
+                    events: &mut Vec<(i64, *mut PyObject)>|
+     -> PyResult<()> {
+        if bracket.contains(current) {
+            events.push((ENTER, current));
+            stack.push(Step::Leave(current));
+        }
+        children.clear();
+        walk.push_children(current, &mut children)?;
+        stack.extend(children.iter().map(|&child| Step::Child(child)));
+        Ok(())
+    };
+    open(node.as_ptr(), &mut stack, &mut events)?;
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Leave(current) => events.push((LEAVE, current)),
+            Step::Child(current) if kinds.contains(current) => events.push((VISIT, current)),
+            Step::Child(current) => open(current, &mut stack, &mut events)?,
+        }
+    }
+    let list = PyList::empty(py);
+    for (event, current) in events {
+        let pair = (event, unsafe { Bound::from_borrowed_ptr(py, current) });
+        list.append(pair)?;
+    }
+    Ok(list.into_any())
 }
 
 /// `ast.fix_missing_locations`, without recursing per tree level. Returns
@@ -277,6 +390,27 @@ pub fn subtree_hashes<'py>(
     py: Python<'py>,
     node: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let hashes = hash_subtrees(py, &node)?;
+    let result = pyo3::types::PyDict::new(py);
+    for (&pointer, &hash) in &hashes {
+        let key = unsafe {
+            Bound::from_owned_ptr_or_err(
+                py,
+                ffi::PyLong_FromVoidPtr(pointer as *mut std::ffi::c_void),
+            )?
+        };
+        result.set_item(key, hash as i64)?;
+    }
+    Ok(result.into_any())
+}
+
+/// `subtree_hashes(node)[id(node)]`, without building the dict.
+#[pyfunction]
+pub fn subtree_hash(py: Python<'_>, node: Bound<'_, PyAny>) -> PyResult<i64> {
+    Ok(hash_subtrees(py, &node)?[&(node.as_ptr() as usize)] as i64)
+}
+
+fn hash_subtrees(py: Python<'_>, node: &Bound<'_, PyAny>) -> PyResult<PointerMap<u64>> {
     let walk = Walk::new(py)?;
     let nodes = walk.pre_order(node.as_ptr())?;
     let mut hashes: PointerMap<u64> = PointerMap::default();
@@ -317,17 +451,7 @@ pub fn subtree_hashes<'py>(
         }
         hashes.insert(current as usize, hash);
     }
-    let result = pyo3::types::PyDict::new(py);
-    for (&pointer, &hash) in &hashes {
-        let key = unsafe {
-            Bound::from_owned_ptr_or_err(
-                py,
-                ffi::PyLong_FromVoidPtr(pointer as *mut std::ffi::c_void),
-            )?
-        };
-        result.set_item(key, hash as i64)?;
-    }
-    Ok(result.into_any())
+    Ok(hashes)
 }
 
 impl Walk<'_> {
@@ -378,13 +502,13 @@ pub(crate) fn frontier_edges(
     node: &Bound<'_, PyAny>,
     kinds: &Bound<'_, PyTuple>,
 ) -> PyResult<Vec<Edge>> {
-    let kinds = type_pointers(kinds)?;
+    let kinds = TypeSet::new(kinds)?;
     let walk = Walk::new(py)?;
     let mut result = Vec::new();
     let mut stack = Vec::new();
     walk.push_child_edges(node.as_ptr(), &mut stack)?;
     while let Some(edge) = stack.pop() {
-        if kinds.contains(&unsafe { ffi::Py_TYPE(edge.node) }) {
+        if kinds.contains(edge.node) {
             result.push(edge);
         } else {
             walk.push_child_edges(edge.node, &mut stack)?;

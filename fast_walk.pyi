@@ -44,11 +44,35 @@ def walk_frontier_edges(
     """
 
 def walk_of_types(
-    node: ast.AST, kinds: tuple[type[ast.AST], ...]
+    node: ast.AST,
+    kinds: tuple[type[ast.AST], ...],
+    prune: tuple[type[ast.AST], ...] | None = None,
 ) -> list[ast.AST]:
     """Return every node under `node` (`node` included) whose exact type is
     in `kinds`, in depth-first pre-order. Unlike :func:`walk_frontier`,
-    matches are descended into.
+    matches are descended into, except a node whose exact type is in
+    `prune`: it is returned if it matches and its children are skipped.
+    `node` itself is always descended.
+    """
+
+def subtree_hash(node: ast.AST) -> int:
+    """``subtree_hashes(node)[id(node)]``, without building the dict."""
+
+def set_parents(node: ast.AST) -> None:
+    """Set ``child.parent`` for every node under `node`, visiting parents in
+    depth-first pre-order. A node reachable from two parents keeps the last.
+    """
+
+def walk_frontier_events(
+    node: ast.AST,
+    kinds: tuple[type[ast.AST], ...],
+    bracket: tuple[type[ast.AST], ...],
+) -> list[tuple[int, ast.AST]]:
+    """The calls a ``NodeVisitor`` makes descending from `node`.
+
+    ``(0, n)`` is a descendant whose exact type is in `kinds`, dispatched and
+    not descended. ``(1, n)`` and ``(2, n)`` surround the descent of a node
+    whose exact type is in `bracket`. `node` itself is always descended.
     """
 
 def fix_missing_locations[T: ast.AST](node: T) -> T:

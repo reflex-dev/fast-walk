@@ -626,6 +626,9 @@ fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fields::walk_of_types, m)?)?;
     m.add_function(wrap_pyfunction!(fields::fix_missing_locations, m)?)?;
     m.add_function(wrap_pyfunction!(fields::subtree_hashes, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::subtree_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::set_parents, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::walk_frontier_events, m)?)?;
     m.add_function(wrap_pyfunction!(_walk_count, m)?)?;
     Ok(())
 }
