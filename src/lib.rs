@@ -10,6 +10,7 @@
 //! `ast.walk` makes no ordering guarantee, so `walk_unordered` is a drop-in
 //! replacement wherever order doesn't matter.
 
+mod fields;
 mod pydict;
 
 use std::cell::{Cell, RefCell};
@@ -17,7 +18,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::exceptions::PyDeprecationWarning;
 use pyo3::ffi::{self, PyListObject, PyObject, PyTypeObject};
-use pyo3::types::{PyList, PyModule, PyType};
+use pyo3::types::{PyList, PyModule, PyTuple, PyType};
+
+use fields::{Strong, frontier_edges, into_pylist};
 use pyo3::{PyTypeInfo, prelude::*};
 
 /// Open-addressed, direct-mapped lookup from `*mut PyTypeObject` to an
@@ -514,6 +517,66 @@ fn walk_unordered<'py>(py: Python<'py>, node: Bound<'py, PyAny>) -> PyResult<Bou
     })
 }
 
+/// A child reached during a frontier walk, with the slot it was read from:
+/// `parent.<key>` when `index < 0`, else `parent.<key>[index]`.
+struct Edge {
+    node: Strong,
+    parent: Strong,
+    key: *mut PyObject,
+    index: ffi::Py_ssize_t,
+}
+
+/// Return the descendants of `node` whose exact type is one of `kinds`, in
+/// depth-first pre-order, without descending below any match. `node`
+/// itself is never included.
+#[pyfunction]
+fn walk_frontier<'py>(
+    py: Python<'py>,
+    node: Bound<'py, PyAny>,
+    kinds: Bound<'py, PyTuple>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let edges = frontier_edges(py, &node, &kinds)?;
+    into_pylist(py, edges.into_iter().map(|edge| edge.node))
+}
+
+/// Like `walk_frontier`, but each match comes as `(node, parent, field,
+/// index)`: the node was read from `parent.<field>` when `index` is `-1`,
+/// else from `parent.<field>[index]`.
+#[pyfunction]
+fn walk_frontier_edges<'py>(
+    py: Python<'py>,
+    node: Bound<'py, PyAny>,
+    kinds: Bound<'py, PyTuple>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let edges = frontier_edges(py, &node, &kinds)?;
+    unsafe {
+        let list_ptr = ffi::PyList_New(edges.len() as ffi::Py_ssize_t);
+        if list_ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        let list = Bound::from_owned_ptr(py, list_ptr);
+        let ob_item = (*(list_ptr as *mut ffi::PyListObject)).ob_item;
+        for (position, edge) in edges.into_iter().enumerate() {
+            let index = ffi::PyLong_FromSsize_t(edge.index);
+            if index.is_null() {
+                return Err(PyErr::fetch(py));
+            }
+            let item = ffi::PyTuple_New(4);
+            if item.is_null() {
+                ffi::Py_DECREF(index);
+                return Err(PyErr::fetch(py));
+            }
+            ffi::Py_INCREF(edge.key);
+            ffi::PyTuple_SET_ITEM(item, 0, edge.node.into_ptr());
+            ffi::PyTuple_SET_ITEM(item, 1, edge.parent.into_ptr());
+            ffi::PyTuple_SET_ITEM(item, 2, edge.key);
+            ffi::PyTuple_SET_ITEM(item, 3, index);
+            *ob_item.add(position) = item;
+        }
+        Ok(list)
+    }
+}
+
 static DEPRECATED_WALK_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Deprecated. Use `walk_dfs` for explicit depth-first order or
@@ -556,6 +619,14 @@ fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk, m)?)?;
     m.add_function(wrap_pyfunction!(walk_dfs, m)?)?;
     m.add_function(wrap_pyfunction!(walk_unordered, m)?)?;
+    m.add_function(wrap_pyfunction!(walk_frontier, m)?)?;
+    m.add_function(wrap_pyfunction!(walk_frontier_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::walk_of_types, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::fix_missing_locations, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::subtree_hashes, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::subtree_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::set_parents, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::walk_frontier_events, m)?)?;
     m.add_function(wrap_pyfunction!(_walk_count, m)?)?;
     Ok(())
 }

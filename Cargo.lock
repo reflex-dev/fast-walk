@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "fast-walk"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "pyo3",
 ]
