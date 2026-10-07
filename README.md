@@ -54,6 +54,20 @@ def generic_visit(self, node):
 (`index` is `-1` for a non-list field), which is what a `NodeTransformer`
 needs to put a replacement back.
 
+### Other helpers
+
+- `walk_of_types(node, kinds)` — every node of the given exact types, in
+  pre-order, descending into matches.
+- `fix_missing_locations(node)` — `ast.fix_missing_locations` without
+  recursion.
+- `subtree_hashes(node)` — `{id(n): hash}` such that equal hashes mean equal
+  `ast.dump` output (leaf types included, so `1` and `True` differ).
+
+These, and both frontier walks, read each child by its `_fields` name, so
+they also work on nodes a transformer built with keyword arguments in
+another order. `walk_dfs` and `walk_unordered` read fields by position,
+which is only guaranteed for parsed trees.
+
 ## Performance
 
 Benchmark on CPython 3.13, walking the AST of `difflib.py` (~2000 lines,

@@ -43,6 +43,24 @@ def walk_frontier_edges(
     when ``index`` is ``-1``, else from ``parent.<field>[index]``.
     """
 
+def walk_of_types(
+    node: ast.AST, kinds: tuple[type[ast.AST], ...]
+) -> list[ast.AST]:
+    """Return every node under `node` (`node` included) whose exact type is
+    in `kinds`, in depth-first pre-order. Unlike :func:`walk_frontier`,
+    matches are descended into.
+    """
+
+def fix_missing_locations[T: ast.AST](node: T) -> T:
+    """``ast.fix_missing_locations`` without recursing once per tree level."""
+
+def subtree_hashes(node: ast.AST) -> dict[int, int]:
+    """A structural hash per node under `node`, keyed by ``id(node)``.
+
+    Subtrees with equal ``ast.dump`` output get equal hashes. A leaf value's
+    type is mixed in, so ``1``, ``1.0`` and ``True`` hash apart.
+    """
+
 def walk(node: ast.AST) -> list[ast.AST]:
     """Deprecated. Use :func:`walk_dfs` for explicit depth-first order or
     :func:`walk_unordered` for the faster order-agnostic variant.

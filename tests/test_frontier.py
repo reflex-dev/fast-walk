@@ -110,3 +110,10 @@ def test_refcount_neutral():
         walk_frontier_edges(tree, (ast.Call, ast.Attribute, ast.Name))
     gc.collect()
     assert [sys.getrefcount(n) for n in nodes] == before
+
+
+def test_fields_are_read_by_name():
+    call = ast.Call(lineno=1, func=ast.Name(id="f", ctx=ast.Load()), args=[])
+    assert [(type(n).__name__, f, i) for n, _, f, i in walk_frontier_edges(call, (ast.Name,))] == [
+        ("Name", "func", -1)
+    ]

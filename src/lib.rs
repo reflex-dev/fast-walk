@@ -10,6 +10,7 @@
 //! `ast.walk` makes no ordering guarantee, so `walk_unordered` is a drop-in
 //! replacement wherever order doesn't matter.
 
+mod fields;
 mod pydict;
 
 use std::cell::{Cell, RefCell};
@@ -18,6 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pyo3::exceptions::PyDeprecationWarning;
 use pyo3::ffi::{self, PyListObject, PyObject, PyTypeObject};
 use pyo3::types::{PyList, PyModule, PyTuple, PyType};
+
+use fields::frontier_edges;
 use pyo3::{PyTypeInfo, prelude::*};
 
 /// Open-addressed, direct-mapped lookup from `*mut PyTypeObject` to an
@@ -524,134 +527,6 @@ struct Edge {
     index: ffi::Py_ssize_t,
 }
 
-/// Push every AST child of `parent` onto `stack` in reverse `_fields`
-/// order, recording the slot each was read from. Same field discovery as
-/// `process_node`, keeping the dict key alongside each value.
-#[inline(always)]
-unsafe fn push_child_edges(
-    parent: *mut PyObject,
-    base_ast_and_expr_type: (*mut PyTypeObject, *mut PyTypeObject),
-    py_list_type: *mut PyTypeObject,
-    field_table: &FieldTable,
-    stack: &mut Vec<Edge>,
-) {
-    let encoded = field_table.lookup(unsafe { ffi::Py_TYPE(parent) });
-    if encoded <= 1 {
-        return;
-    }
-    let Some(dict) = get_instance_dict_fast(parent) else {
-        return;
-    };
-    unsafe {
-        let keys = &*(*dict.cast::<ffi::PyDictObject>())
-            .ma_keys
-            .cast::<pydict::PyDictKeysObject>();
-        let entries = keys.unicode_entries();
-        let mut current = (keys.dk_nentries as usize).min((encoded - 1) as usize);
-        while current > 0 {
-            current -= 1;
-            let entry = *entries.add(current);
-            let value = entry.me_value;
-            if value.is_null() {
-                continue;
-            }
-            let value_type = ffi::Py_TYPE(value);
-            if value_type == py_list_type {
-                let list = value as *mut PyListObject;
-                let length = (*(list as *mut ffi::PyVarObject)).ob_size;
-                let ob_item = (*list).ob_item;
-                for index in (0..length).rev() {
-                    let child = *ob_item.offset(index);
-                    if issubclass_of_ast(ffi::Py_TYPE(child), base_ast_and_expr_type) {
-                        stack.push(Edge {
-                            node: child,
-                            parent,
-                            key: entry.me_key,
-                            index,
-                        });
-                    }
-                }
-            } else if issubclass_of_ast(value_type, base_ast_and_expr_type) {
-                stack.push(Edge {
-                    node: value,
-                    parent,
-                    key: entry.me_key,
-                    index: -1,
-                });
-            }
-        }
-    }
-}
-
-/// Descendants of `root` (excluding `root`) whose exact type is in `kinds`,
-/// in depth-first pre-order, without descending below any of them. This is
-/// the set of nodes `ast.NodeVisitor.generic_visit` would dispatch to a
-/// `visit_<kind>` method, given that every other node falls through to the
-/// generic descent.
-fn walk_node_frontier(
-    root: *mut PyObject,
-    kinds: &[*mut PyTypeObject],
-    base_ast_and_expr_type: (*mut PyTypeObject, *mut PyTypeObject),
-    py_list_type: *mut PyTypeObject,
-    field_table: &FieldTable,
-    result: &mut Vec<Edge>,
-) {
-    let mut stack = Vec::new();
-    unsafe {
-        push_child_edges(
-            root,
-            base_ast_and_expr_type,
-            py_list_type,
-            field_table,
-            &mut stack,
-        );
-    }
-    while let Some(edge) = stack.pop() {
-        if kinds.contains(&unsafe { ffi::Py_TYPE(edge.node) }) {
-            result.push(edge);
-        } else {
-            unsafe {
-                push_child_edges(
-                    edge.node,
-                    base_ast_and_expr_type,
-                    py_list_type,
-                    field_table,
-                    &mut stack,
-                );
-            }
-        }
-    }
-}
-
-fn type_pointers(kinds: &Bound<'_, PyTuple>) -> PyResult<Vec<*mut PyTypeObject>> {
-    kinds
-        .iter()
-        .map(|kind| Ok(kind.cast_into::<PyType>()?.as_type_ptr()))
-        .collect()
-}
-
-fn frontier_edges(
-    py: Python<'_>,
-    node: &Bound<'_, PyAny>,
-    kinds: &Bound<'_, PyTuple>,
-) -> PyResult<Vec<Edge>> {
-    let base = resolve_base_types(py)?;
-    let py_list_type = PyList::type_object_raw(py);
-    let kinds = type_pointers(kinds)?;
-    with_field_table(py, |table| {
-        let mut result = Vec::new();
-        walk_node_frontier(
-            node.as_ptr(),
-            &kinds,
-            base,
-            py_list_type,
-            table,
-            &mut result,
-        );
-        Ok(result)
-    })
-}
-
 /// Return the descendants of `node` whose exact type is one of `kinds`, in
 /// depth-first pre-order, without descending below any match. `node`
 /// itself is never included.
@@ -748,6 +623,9 @@ fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk_unordered, m)?)?;
     m.add_function(wrap_pyfunction!(walk_frontier, m)?)?;
     m.add_function(wrap_pyfunction!(walk_frontier_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::walk_of_types, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::fix_missing_locations, m)?)?;
+    m.add_function(wrap_pyfunction!(fields::subtree_hashes, m)?)?;
     m.add_function(wrap_pyfunction!(_walk_count, m)?)?;
     Ok(())
 }
