@@ -18,4 +18,4 @@ lto = true        # Link-time optimization.
 codegen-units = 1 # Slower compilation but faster code.
 
 [dependencies]
-pyo3 = "0.29.2"
+pyo3 = "0.29.3"
