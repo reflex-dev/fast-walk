@@ -82,7 +82,10 @@ def subtree_hashes(node: ast.AST) -> dict[int, int]:
     """A structural hash per node under `node`, keyed by ``id(node)``.
 
     Subtrees with equal ``ast.dump`` output get equal hashes. A leaf value's
-    type is mixed in, so ``1``, ``1.0`` and ``True`` hash apart.
+    type is mixed in, so ``1``, ``1.0`` and ``True`` hash apart, and a value
+    that is not a str, bytes, int, bool, None or Ellipsis is hashed by its
+    ``repr``, so NaNs hash together, ``-0.0`` and ``0.0`` apart, and an
+    unhashable constant still hashes.
     """
 
 def walk(node: ast.AST) -> list[ast.AST]:

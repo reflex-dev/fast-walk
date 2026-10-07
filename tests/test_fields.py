@@ -285,3 +285,94 @@ def test_refcount_neutral():
         walk_frontier_events(tree, (ast.Name,), EXPRESSIONS)
     gc.collect()
     assert [sys.getrefcount(n) for n in nodes] == before
+
+
+def name(id_: str = "x") -> ast.Name:
+    return ast.Name(id=id_, ctx=ast.Load())
+
+
+class Computed(ast.expr):
+    _fields = ("child",)
+
+    @property
+    def child(self):
+        return name("computed")
+
+
+def test_a_field_a_property_computes_survives_the_walk():
+    node = Computed()
+    found = walk_of_types(node, (ast.Name,))
+    assert [n.id for n in found] == ["computed"]
+    assert [n.id for n in walk_frontier_events(node, (ast.Name,), ())[0][1:]] == ["computed"]
+    assert len({subtree_hash(Computed()) for _ in range(3)}) == 1
+
+
+class Dropping(ast.expr):
+    _fields = ("first", "second")
+
+    @property
+    def second(self):
+        self.__dict__.pop("first", None)
+
+
+def test_a_field_read_may_drop_the_only_reference_to_a_child():
+    node = Dropping()
+    node.first = name("first")
+    assert [n.id for n in walk_of_types(node, (ast.Name,))] == ["first"]
+    node = Dropping()
+    node.first = name("first")
+    set_parents(node)
+
+
+def test_a_type_whose_address_is_reused_is_read_by_its_own_fields():
+    for index in range(300):
+        kind = type(f"Kind{index}", (ast.expr,), {"_fields": (f"field{index}",)})
+        node = kind()
+        setattr(node, f"field{index}", name(str(index)))
+        assert [n.id for n in walk_of_types(node, (ast.Name,))] == [str(index)]
+        del kind, node
+        gc.collect()
+
+
+class MyAssign(ast.Assign):
+    pass
+
+
+class Deeper(MyAssign):
+    pass
+
+
+def test_a_subclass_of_any_depth_is_a_node():
+    statement = Deeper(targets=[name("a")], value=name("b"))
+    tree = ast.Module(body=[statement], type_ignores=[])
+    assert walk_of_types(tree, (ast.Name,)) == list(statement.targets) + [statement.value]
+    assert walk_of_types(tree, (Deeper,)) == [statement]
+    set_parents(tree)
+    assert statement.parent is tree
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (lambda: float("nan"), lambda: float("nan")),
+        (lambda: (1, float("nan")), lambda: (1, float("nan"))),
+        (lambda: complex(float("nan"), 0), lambda: complex(float("nan"), 0)),
+        (lambda: 0.0, lambda: -0.0),
+        (lambda: 0j, lambda: -0j),
+        (lambda: [1], lambda: [1]),
+        (lambda: [1], lambda: [2]),
+    ],
+)
+def test_constant_values_hash_as_ast_dump_compares_them(left, right):
+    a, b = ast.Constant(value=left()), ast.Constant(value=right())
+    assert (subtree_hash(a) == subtree_hash(b)) == (ast.dump(a) == ast.dump(b))
+
+
+class Defaulted(ast.AST):
+    _fields = ("child",)
+    child = name("default")
+
+
+def test_a_node_with_no_instance_dict_reads_its_fields_by_attribute():
+    node = Defaulted.__new__(Defaulted)
+    assert walk_of_types(node, (ast.Name,)) == list(ast.iter_child_nodes(node))

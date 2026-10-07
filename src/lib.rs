@@ -20,7 +20,7 @@ use pyo3::exceptions::PyDeprecationWarning;
 use pyo3::ffi::{self, PyListObject, PyObject, PyTypeObject};
 use pyo3::types::{PyList, PyModule, PyTuple, PyType};
 
-use fields::frontier_edges;
+use fields::{Strong, frontier_edges, into_pylist};
 use pyo3::{PyTypeInfo, prelude::*};
 
 /// Open-addressed, direct-mapped lookup from `*mut PyTypeObject` to an
@@ -519,10 +519,9 @@ fn walk_unordered<'py>(py: Python<'py>, node: Bound<'py, PyAny>) -> PyResult<Bou
 
 /// A child reached during a frontier walk, with the slot it was read from:
 /// `parent.<key>` when `index < 0`, else `parent.<key>[index]`.
-#[derive(Clone, Copy)]
 struct Edge {
-    node: *mut PyObject,
-    parent: *mut PyObject,
+    node: Strong,
+    parent: Strong,
     key: *mut PyObject,
     index: ffi::Py_ssize_t,
 }
@@ -537,8 +536,7 @@ fn walk_frontier<'py>(
     kinds: Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let edges = frontier_edges(py, &node, &kinds)?;
-    let nodes: Vec<*mut PyObject> = edges.iter().map(|edge| edge.node).collect();
-    vec_into_pylist(py, &nodes)
+    into_pylist(py, edges.into_iter().map(|edge| edge.node))
 }
 
 /// Like `walk_frontier`, but each match comes as `(node, parent, field,
@@ -558,7 +556,7 @@ fn walk_frontier_edges<'py>(
         }
         let list = Bound::from_owned_ptr(py, list_ptr);
         let ob_item = (*(list_ptr as *mut ffi::PyListObject)).ob_item;
-        for (position, edge) in edges.iter().enumerate() {
+        for (position, edge) in edges.into_iter().enumerate() {
             let index = ffi::PyLong_FromSsize_t(edge.index);
             if index.is_null() {
                 return Err(PyErr::fetch(py));
@@ -568,10 +566,10 @@ fn walk_frontier_edges<'py>(
                 ffi::Py_DECREF(index);
                 return Err(PyErr::fetch(py));
             }
-            for (slot, value) in [edge.node, edge.parent, edge.key].into_iter().enumerate() {
-                ffi::Py_INCREF(value);
-                ffi::PyTuple_SET_ITEM(item, slot as ffi::Py_ssize_t, value);
-            }
+            ffi::Py_INCREF(edge.key);
+            ffi::PyTuple_SET_ITEM(item, 0, edge.node.into_ptr());
+            ffi::PyTuple_SET_ITEM(item, 1, edge.parent.into_ptr());
+            ffi::PyTuple_SET_ITEM(item, 2, edge.key);
             ffi::PyTuple_SET_ITEM(item, 3, index);
             *ob_item.add(position) = item;
         }
