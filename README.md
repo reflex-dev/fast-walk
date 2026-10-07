@@ -37,6 +37,23 @@ for node in walk_unordered(tree):
   depth-first pre-order visitation. `ast.walk` does not document an order,
   so most callers can safely use `walk_unordered`.
 
+### Visiting only some node types
+
+`walk_frontier(node, kinds)` returns the descendants whose exact type is in
+`kinds`, in depth-first pre-order, without descending below a match. That is
+the set `ast.NodeVisitor.generic_visit` hands to `visit_<kind>` methods, so a
+visitor whose only methods are `visit_<kind>` can descend with:
+
+```python
+def generic_visit(self, node):
+    for child in walk_frontier(node, (ast.Call, ast.Attribute)):
+        self.visit(child)
+```
+
+`walk_frontier_edges` returns `(node, parent, field, index)` tuples instead
+(`index` is `-1` for a non-list field), which is what a `NodeTransformer`
+needs to put a replacement back.
+
 ## Performance
 
 Benchmark on CPython 3.13, walking the AST of `difflib.py` (~2000 lines,

@@ -23,6 +23,26 @@ def walk_unordered(node: ast.AST) -> list[ast.AST]:
     25% faster than :func:`walk_dfs` on real Python source.
     """
 
+def walk_frontier(
+    node: ast.AST, kinds: tuple[type[ast.AST], ...]
+) -> list[ast.AST]:
+    """Return the descendants of `node` whose exact type is in `kinds`, in
+    depth-first pre-order, without descending below any match. `node`
+    itself is never included.
+
+    These are the nodes ``ast.NodeVisitor.generic_visit`` dispatches to a
+    ``visit_<kind>`` method when every other node falls through to the
+    generic descent.
+    """
+
+def walk_frontier_edges(
+    node: ast.AST, kinds: tuple[type[ast.AST], ...]
+) -> list[tuple[ast.AST, ast.AST, str, int]]:
+    """Like :func:`walk_frontier`, but each match comes as
+    ``(node, parent, field, index)``: it was read from ``parent.<field>``
+    when ``index`` is ``-1``, else from ``parent.<field>[index]``.
+    """
+
 def walk(node: ast.AST) -> list[ast.AST]:
     """Deprecated. Use :func:`walk_dfs` for explicit depth-first order or
     :func:`walk_unordered` for the faster order-agnostic variant.
