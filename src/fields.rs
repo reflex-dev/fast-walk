@@ -347,7 +347,10 @@ pub fn walk_of_types<'py>(
 
 /// Set `child.parent = parent` for every node under `node`, visiting parents
 /// in depth-first pre-order and each parent's children in
-/// `ast.iter_child_nodes` order. `node` itself is left alone.
+/// `ast.iter_child_nodes` order. `node` itself is left alone, and so is every
+/// node with no fields (`Load`, `Add`, `And`, ...): the parser hands out one
+/// instance of each per interpreter, so a parent set there would point every
+/// tree in the process at this one and keep it alive.
 #[pyfunction]
 pub fn set_parents(py: Python<'_>, node: Bound<'_, PyAny>) -> PyResult<()> {
     let walk = Walk::new(py)?;
@@ -356,6 +359,10 @@ pub fn set_parents(py: Python<'_>, node: Bound<'_, PyAny>) -> PyResult<()> {
     let mut stack = vec![unsafe { Strong::borrowed(node.as_ptr()) }];
     while let Some(parent) = stack.pop() {
         walk.push_children(&parent, &mut children)?;
+        children.retain(|child| {
+            let info = unsafe { &*type_info(py, ffi::Py_TYPE(child.as_ptr())) };
+            !info.fields.is_empty()
+        });
         for child in children.iter().rev() {
             if unsafe { ffi::PyObject_SetAttr(child.as_ptr(), name.as_ptr(), parent.as_ptr()) }
                 == -1
