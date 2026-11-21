@@ -61,6 +61,9 @@ def subtree_hash(node: ast.AST) -> int:
 def set_parents(node: ast.AST) -> None:
     """Set ``child.parent`` for every node under `node`, visiting parents in
     depth-first pre-order. A node reachable from two parents keeps the last.
+
+    Nodes with no fields (``Load``, ``Add``, ``And``, ...) get no parent: the
+    parser shares one instance of each across every tree in the interpreter.
     """
 
 def walk_frontier_events(

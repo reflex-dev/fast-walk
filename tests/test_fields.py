@@ -90,7 +90,8 @@ def test_set_parents_matches_a_pre_order_loop():
     set_parents(ours)
     for node in pre_order(theirs):
         for child in ast.iter_child_nodes(node):
-            child.parent = node
+            if child._fields:
+                child.parent = node
     assert not hasattr(ours, "parent")
     position = {id(n): i for i, n in enumerate(pre_order(theirs))}
     position |= {id(n): i for i, n in enumerate(pre_order(ours))}
@@ -106,6 +107,15 @@ def test_set_parents_gives_a_shared_node_its_last_parent():
     tree.body[1].value.args[0] = shared
     set_parents(tree)
     assert shared.parent is tree.body[1].value
+
+
+def test_set_parents_leaves_the_parsers_shared_nodes_alone():
+    tree = ast.parse("a = not b and c + d < e")
+    set_parents(tree)
+    shared = [node for node in ast.walk(tree) if not node._fields]
+    assert {type(node) for node in shared} >= {ast.Load, ast.Store, ast.Not}
+    assert all(not hasattr(node, "parent") for node in shared)
+    assert not hasattr(ast.parse("x").body[0].value.ctx, "parent")
 
 
 def reference_events(node, kinds, bracket):
