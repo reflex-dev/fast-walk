@@ -1,5 +1,7 @@
 [package]
 name = "fast-walk"
+# A release takes its version from its tag (.github/set-version-from-tag.sh);
+# this one is only what an untagged build reports.
 version = "0.3.0"
 edition = "2024"
 license = "MIT"

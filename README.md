@@ -122,6 +122,16 @@ pytest tests/test_refcount.py
 pytest tests/benchmarks.py --codspeed
 ```
 
+### Releasing
+
+A release is a tag on `main`, and the tag is the version. There is no version-bump commit:
+
+```bash
+gh release create v0.3.1 --target main --generate-notes
+```
+
+CI writes the tag's version into `Cargo.toml` and `Cargo.lock` before it builds (`.github/set-version-from-tag.sh`), then publishes the wheels and sdist to PyPI. The `version` checked into `Cargo.toml` is only what an untagged build reports.
+
 ## License
 
 MIT
